@@ -60,7 +60,7 @@ double cpu_util(const char *s) {
   }
   return util;
 }
-
+/* contains virtual memory statistics and calculates swap activity */
 double swap_activity() {
   const char *const PROC_VMSTAT = "/proc/vmstat";
   FILE *file;
