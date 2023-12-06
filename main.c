@@ -10,8 +10,8 @@
 #include "system.h"
 #include <signal.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/sysinfo.h>
+#include <unistd.h>
 
 /**
  * Needs:
@@ -33,23 +33,13 @@ double cpu_util(const char *s) {
   double util;
   uint64_t i;
 
-  /*
-    user
-    nice
-    system
-    idle
-    iowait
-    irq
-    softirq
-  */
-
   if (!(p = strstr(s, " ")) ||
       (7 != sscanf(p, "%u %u %u %u %u %u %u", &vector[0], &vector[1],
                    &vector[2], &vector[3], &vector[4], &vector[5],
                    &vector[6]))) {
     return 0;
   }
-  sum = 0.0;
+  sum = 0;
   for (i = 0; i < ARRAY_SIZE(vector); ++i) {
     sum += vector[i];
   }
@@ -60,12 +50,27 @@ double cpu_util(const char *s) {
   }
   return util;
 }
-/* contains virtual memory statistics and calculates swap activity */
+
+double get_cpu_util() {
+  const char *const PROC_STAT = "/proc/stat";
+  char line[1024];
+  FILE *file;
+  if (!(file = fopen(PROC_STAT, "r"))) {
+    TRACE("fopen()");
+    return -1;
+  }
+  if (fgets(line, sizeof(line), file)) {
+    fclose(file);
+    return cpu_util(line);
+  }
+  return 0.0;
+}
+
 double swap_activity() {
   const char *const PROC_VMSTAT = "/proc/vmstat";
   FILE *file;
   char line[1024];
-  unsigned long pagesSwappedIn, pagesSwappedOut;
+  unsigned long pagesSwappedIn = 0, pagesSwappedOut = 0;
   double swapActivity;
 
   file = fopen(PROC_VMSTAT, "r");
@@ -83,7 +88,7 @@ double swap_activity() {
 
   fclose(file);
 
-  swapActivity = pagesSwappedIn + pagesSwappedOut;
+  swapActivity = (double)pagesSwappedIn + pagesSwappedOut;
   return swapActivity;
 }
 
@@ -122,11 +127,11 @@ double disk_io_activity() {
   }
 
   while (fgets(line, sizeof(line), file)) {
-    if (sscanf(
-            line,
-            "%*u %*u %s %*u %*u %lu %*u %*u %lu %*u %*u %*u %*u %*u %*u %*u "
-            "%*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %lu %lu",
-            device, &readIO, &writeIO, &discardIO, &flushIO) == 5) {
+
+    if (sscanf(line,
+               "%*u %*u %s %*u %*u %lu %*u %*u %lu %*u %*u %lu %*u %*u %*u %*u "
+               "%lu %*u %*u %*u",
+               device, &readIO, &writeIO, &discardIO, &flushIO) == 5) {
       if (strcmp(device, targetDevice) == 0) {
         break;
       }
@@ -135,7 +140,7 @@ double disk_io_activity() {
 
   fclose(file);
 
-  iops = (readIO + writeIO + discardIO + flushIO) / 2.0;
+  iops = ((double)readIO + writeIO + discardIO + flushIO) / 2.0;
   return iops;
 }
 
@@ -168,7 +173,7 @@ double disk_io_rate() {
   fclose(file);
 
   /* Calculate I/O rate in kilobytes per second */
-  ioRate = (readIO + writeIO) / 1024.0;
+  ioRate = ((double)readIO + writeIO) / 1024.0;
   return ioRate;
 }
 
@@ -206,27 +211,24 @@ double memory_util() {
 }
 
 void os_uptime() {
-    struct sysinfo si;
+  struct sysinfo si;
   unsigned long days, hours, minutes, seconds;
 
-    if (sysinfo(&si) != 0) {
-        perror("sysinfo");
-        exit(EXIT_FAILURE);
-    }
+  if (sysinfo(&si) != 0) {
+    perror("sysinfo");
+    exit(EXIT_FAILURE);
+  }
 
-    days = si.uptime / (60 * 60 * 24);
-    hours = (si.uptime / (60 * 60)) % 24;
-    minutes = (si.uptime / 60) % 60;
-    seconds = si.uptime % 60;
+  days = si.uptime / (60 * 60 * 24);
+  hours = (si.uptime / (60 * 60)) % 24;
+  minutes = (si.uptime / 60) % 60;
+  seconds = si.uptime % 60;
 
-    printf("OS Uptime: %lu days, %lu:%02lu:%02lu\n", days, hours, minutes, seconds);
+  printf("OS Uptime: %lu days, %lu:%02lu:%02lu\n", days, hours, minutes,
+         seconds);
 }
 
 int main(int argc, char *argv[]) {
-  const char *const PROC_STAT = "/proc/stat";
-  char line[1024];
-  FILE *file;
-
   UNUSED(argc);
   UNUSED(argv);
 
@@ -238,68 +240,42 @@ int main(int argc, char *argv[]) {
     double loadavg[3];
     double ioRate, ioActivity, swapAct;
 
-    if (!(file = fopen(PROC_STAT, "r"))) {
-      TRACE("fopen()");
-      return -1;
-    }
     printf("\033[2J\033[H");
 
     printf("--------\n");
     printf("CPU Utilization Metrics\n");
 
-    if (fgets(line, sizeof(line), file)) {
-      printf("CPU Usage: %5.1f%%\n", cpu_util(line));
-      fflush(stdout);
-    }
+    printf("CPU Usage: %5.1f%%\n", get_cpu_util());
 
     get_load_average(loadavg);
-    printf("Load Average (1min, 5min, 15min): %.2f, %.2f, %.2f\n", loadavg[0], loadavg[1], loadavg[2]);
-    fflush(stdout);
+    printf("Load Average (1min, 5min, 15min): %.2f, %.2f, %.2f\n", loadavg[0],
+           loadavg[1], loadavg[2]);
 
     printf("--------\n");
     printf("I/O Metrics\n");
 
     ioRate = disk_io_rate();
-    if (ioRate != -1) {
-      printf("Disk I/O Rate: %.2f KB/s\n", ioRate);
-    } else {
-      printf("Unable to retrieve disk I/O rate information.\n");
-    }
-    fflush(stdout);
+    printf("Disk I/O Rate: %.2f KB/s\n", ioRate);
 
     ioActivity = disk_io_activity();
-    if (ioActivity != -1) {
-      printf("Disk I/O Activity (IOPS): %.2f\n", ioActivity);
-    } else {
-      printf("Unable to retrieve disk I/O activity information.\n");
-    }
-    fflush(stdout);
+    printf("Disk I/O Activity (IOPS): %.2f\n", ioActivity);
 
     printf("--------\n");
     printf("Memory Metrics\n");
 
     printf("Memory Usage: %.2f%%\n", memory_util());
-    fflush(stdout);
 
     swapAct = swap_activity();
-    if (swapAct != -1) {
-      printf("Swap Activity: %.2f pages per second\n", swapAct);
-    } else {
-      printf("Unable to retrieve swap activity information.\n");
-    }
-    fflush(stdout);
+    printf("Swap Activity: %.2f pages per second\n", swapAct);
 
     printf("--------\n");
     printf("System Uptime Metrics\n");
 
     os_uptime();
-    fflush(stdout);
 
     printf("--------\n");
-	fflush(stdout);
-
+    fflush(stdout);
     us_sleep(500000);
-    fclose(file);
   }
 
   printf("\rDone!   \n");
